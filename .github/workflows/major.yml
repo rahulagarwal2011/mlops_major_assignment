@@ -1,0 +1,105 @@
+name: mlops pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  test_suite:
+    name: run unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: configure python environment
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: install required dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: execute pytest on unit tests
+        run: pytest tests/ -v
+
+  train_and_quantize:
+    name: train and quantize model
+    runs-on: ubuntu-latest
+    needs: test_suite
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: configure python environment
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: install required dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: train linear regression model
+        run: python src/train.py
+
+      - name: apply manual quantization
+        run: python src/quantize.py
+
+      - name: verify generated model files
+        run: |
+          echo "verifying model files in root directory"
+          ls -lh *.joblib
+          test -f model.joblib || (echo "missing: model.joblib" && exit 1)
+          test -f quant_params.joblib || (echo "missing: quant_params.joblib" && exit 1)
+
+      - name: upload model artifacts from root
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            *.joblib
+          retention-days: 30
+          if-no-files-found: error
+
+  build_and_test_container:
+    name: build and test docker container
+    runs-on: ubuntu-latest
+    needs: train_and_quantize
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: download model artifacts into root
+        uses: actions/download-artifact@v4
+        with:
+          name: model-artifacts
+          path: .
+
+      - name: verify downloaded model files
+        run: |
+          echo "listing downloaded joblib files"
+          ls -lh *.joblib
+          test -f model.joblib || (echo "model.joblib not found" && exit 1)
+          test -f quant_params.joblib || (echo "quant_params.joblib not found" && exit 1)
+
+      - name: install python dependencies for local testing
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: build docker image with prediction script
+        run: docker build -t mlops-linear-model .
+
+      - name: run prediction container
+        run: docker run --rm mlops-linear-model
