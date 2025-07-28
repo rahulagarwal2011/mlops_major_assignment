@@ -22,8 +22,8 @@ a fully automated mlops pipeline that trains a linear regression model on the ca
 
 ### step 1: clone the repo
 ```bash
-git clone <repo-url>
-cd mlops-final-assignment
+git clone https://github.com/rahulagarwal2011/mlops_major_assignment.git
+cd mlops_major_assignment
 ```
 
 ### step 2: create conda environment
