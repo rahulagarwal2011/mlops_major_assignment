@@ -36,7 +36,7 @@ conda activate mlops_final
 ```bash
 pip install -r requirements.txt
 ```
-![conda-setup](images/conda_setup.png)
+![conda-setup](images/conda-setup.png)
 ---
 
 ## model training
