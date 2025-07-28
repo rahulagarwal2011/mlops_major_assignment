@@ -52,6 +52,24 @@ python src/train.py
 
 ---
 
+## unit testing with test_train.py
+
+to ensure correctness and reliability, we implemented `tests/test_train.py` covering key aspects of the training pipeline.
+
+### why we created test_train.py
+- validate model training and saving mechanisms
+- confirm the model achieves a minimum r² threshold
+- verify artifacts (`model.joblib`) are generated correctly
+- check for prediction consistency on sample data
+
+### running the tests
+```bash
+pytest tests/test_train.py
+
+![test-output](images/test_output.png)
+
+---
+
 ## manual quantization
 
 manually quantizing the trained model (both weights and intercept).
@@ -89,7 +107,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
-COPY *.joblib ./src/
+COPY *.joblib ./
 CMD ["python", "src/predict.py"]
 ```
 
