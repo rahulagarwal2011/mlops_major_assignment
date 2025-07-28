@@ -65,26 +65,28 @@ to ensure correctness and reliability, we implemented `tests/test_train.py` cove
 ### running the tests
 ```bash
 pytest tests/test_train.py
-
+```
 ![test-output](images/test_output.png)
 
 ---
 
 ## manual quantization
 
-manually quantizing the trained model (both weights and intercept).
+### why we created quantize.py
+- manually quantize model weights and intercept
+- verify quantization effects on model performance
 
+### running the quantize.py
 ```bash
 python src/quantize.py
 ```
-
-
 ![quatize-output-t1](images/quatize_output_t1.png)
 ![quatize-output-t2](images/quatize_output_t2.png)
 ![quatize-output-t3](images/quatize_output_t3.png)
 
 ![quatize-output-g1](images/quatize_output_g1.png)
 ![quatize-output-g2](images/quatize_output_g2.png)
+
 ---
 
 ## utility module
