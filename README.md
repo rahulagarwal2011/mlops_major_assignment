@@ -1,5 +1,5 @@
 
-# mlops linear regression pipeline
+# MLOPS Major Exam Assigmnet
 
 a fully automated mlops pipeline that trains a linear regression model on the california housing dataset, applies manual quantization, evaluates prediction quality, containerizes the codebase with docker, and orchestrates workflow using github actions.
 
