@@ -84,8 +84,17 @@ python src/quantize.py
 ![quatize-output-t2](images/quatize_output_t2.png)
 ![quatize-output-t3](images/quatize_output_t3.png)
 
+### running the 8bit and 16bit quantization and comparisson
+
+![16bit-quant-t1](images/16bit_quant_t1.png)
+![16bit-quant-t2](images/16bit_quant_t2.png)
+![16bit-quant-t3](images/16bit_quant_t3.png)
+
 ![quatize-output-g1](images/quatize_output_g1.png)
 ![quatize-output-g2](images/quatize_output_g2.png)
+
+### with error comparison
+![error](images/error.png)
 
 ---
 
@@ -209,34 +218,41 @@ git commit -m "added training and utility modules"
 
 ---
 
-## Output Analysis
+## output analysis
 
 ### analysis of quantize.py
 
-- the quantized model shows a drastic performance drop (r² < 0) due to dequantization errors, highlighting precision loss.  
-- while coefficients preserved structure (low max error), the dequantized predictions diverged strongly from sklearn outputs.  
-- memory savings were observed (0.7 kb → 0.5 kb), but not at the cost of reliable prediction quality.  
-- further research into advanced quantization techniques (dynamic or mixed precision) is recommended before production use.  
-
----
+- the 8-bit quantized model dropped sharply in accuracy, giving a negative r² and very high errors.  
+- this happened because reducing values to just 256 steps caused too much rounding.  
+- the 16-bit quantized model stayed very close to the original, with almost the same r² and very small prediction errors.  
+- both 8-bit and 16-bit reduced the model size from 0.7 kb to 0.5 kb, but the quality difference was huge.  
+- 16-bit clearly worked much better, with errors about 300 times smaller than 8-bit.  
+- even though 8-bit fails here, it is often used in practice because it saves more memory and can run faster on certain hardware like edge devices or mobile phones where small size and speed are more important than a slight drop in accuracy.  
 
 ### analysis of predict.py
 
-- the r² score of 0.5758 suggests the model explains around 58% of the variance in housing prices, which is reasonable for a simple linear regression on a complex dataset.  
-- mean squared error (0.5559) and mean absolute error (0.5332) confirm moderate accuracy, with errors distributed fairly evenly.  
-- mean absolute percentage error (~31.95%) indicates predictions deviate on average by about a third of the true value, reflecting limitations of linear regression.  
-- inspection of the first 10 predictions shows errors typically within 0.2–0.7, with occasional larger deviations, highlighting cases where non-linearity in the dataset is not captured well.  
-- overall, the model provides a solid baseline, but further improvements (regularization, feature engineering, or advanced models) could reduce error rates.
+- the r² score of 0.5758 shows the model explains a bit more than half the variation in housing prices. that’s decent for a simple linear regression on a tough dataset.  
+- mse (0.5559) and mae (0.5332) confirm the model is fairly accurate but not perfect.  
+- predictions on the first 10 test samples matched sklearn outputs closely, showing the original model works as expected.  
+- the main weakness comes from the linear nature of the model, which misses some non-linear patterns in the data.  
 
 ---
 
 ## final remarks
 
-this project demonstrates an end-to-end mlops pipeline with:
+this shows a full mlops pipeline with reproducibility, easy interpretation, and a clear look at how quantization affects accuracy.  
 
-- reproducibility
-- interpretability
-- quantization performance comparison
-- zero-manual-deployment
+while 8-bit quantization saves space and can be faster, in this case it hurts accuracy too much.  
+16-bit provides nearly the same accuracy as the original model, so it is the safer choice unless extreme memory savings or speed are absolutely required.  
 
 ---
+
+## 8-bit vs 16-bit quantization
+
+| aspect              | 8-bit                                | 16-bit                               |
+|---------------------|--------------------------------------|--------------------------------------|
+| model size          | smaller (0.5 kb)                     | slightly larger (0.5 kb)             |
+| accuracy            | poor (negative r² in this case)      | almost identical to original          |
+| error per sample    | very high (avg ~6.3)                 | very low (avg ~0.02)                 |
+| use cases           | edge devices, mobile, extreme memory saving | servers, production systems where accuracy matters |
+| recommendation      | only if memory/speed is critical      | preferred for balanced performance    |

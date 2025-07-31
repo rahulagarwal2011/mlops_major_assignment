@@ -71,6 +71,15 @@ def quantize_array(arr):
 def dequantize_array(quant, minimum, scale):
     return quant.astype(np.float32) / scale + minimum
 
+def quantize_array_16bit(arr):
+    minimum = arr.min()
+    scale = 65535 / (arr.max() - minimum + 1e-8)
+    quant = ((arr - minimum) * scale).astype(np.uint16)
+    return quant, minimum, scale
+
+def dequantize_array_16bit(quant, minimum, scale):
+    return quant.astype(np.float32) / scale + minimum
+
 def print_metric_table(metrics):
     print("\\nmodel accuracy and loss\\n")
     print(tabulate(metrics, headers=["metric", "original model", "quantized model"], tablefmt="github"))
