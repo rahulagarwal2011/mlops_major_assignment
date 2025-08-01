@@ -98,15 +98,11 @@ python src/quantize.py
 
 - i have quantized all model coefficients together instead of per element
 - adjusted model bias after quantizatin to fix introduced predition drift due to quantization
-- to prevent matrix multiplication errors & invalid predictions , reatined same weights as original
+- to prevent matrix multiplication errors & invalid predictions , retained same weights as original
 
 ![fix-quatize-output-g1](images/fix_quatize_output_g1.png)
 ![fix-quatize-output-g2](images/fix_quatize_output_g2.png)
 
-
-
-### with error comparison
-![error](images/error.png)
 
 ---
 
