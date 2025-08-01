@@ -1,140 +1,214 @@
 import numpy as np
-from utils import load_model, save_params, get_file_size_kb, quantize_array, dequantize_array, quantize_array_16bit, dequantize_array_16bit, load_data
+from utils import (
+    load_model,
+    save_params,
+    get_file_size_kb,
+    quantize_array_16bit,
+    dequantize_array_16bit,
+    load_data,
+)
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from tabulate import tabulate
 
+
+# ==============================
+# Metrics
+# ==============================
+def compute_metrics(y_true, y_pred):
+    return {
+        "r2": r2_score(y_true, y_pred),
+        "mse": mean_squared_error(y_true, y_pred),
+        "mae": mean_absolute_error(y_true, y_pred),
+    }
+
+
+# ==============================
+# Quantization (tensor-level)
+# ==============================
+def quantize_tensor(params, bits=8):
+    params = np.array(params, dtype=np.float32)
+    p_min, p_max = np.min(params), np.max(params)
+    if p_max == p_min:
+        scale = 1.0
+        q = np.zeros_like(params, dtype=np.uint8 if bits == 8 else np.uint16)
+    else:
+        scale = (2**bits - 1) / (p_max - p_min)
+        q = np.round((params - p_min) * scale).astype(
+            np.uint8 if bits == 8 else np.uint16
+        )
+    return q.reshape(params.shape), p_min, scale
+
+
+def dequantize_tensor(q, p_min, scale):
+    dq = q.astype(np.float32) / scale + p_min
+    return dq.reshape(q.shape)
+
+
+# ==============================
+# Bias correction
+# ==============================
+def bias_correction(X, y_true, dq_weights, orig_bias):
+    preds = X @ dq_weights + orig_bias
+    drift = np.mean(y_true - preds)
+    return orig_bias + drift
+
+
+# ==============================
+# Prediction
+# ==============================
+def predict_from_weights(features, weights, bias):
+    return features @ weights + bias
+
+
+# ==============================
+# Show parameter stats
+# ==============================
+def show_param_stats(label, q_vals, dq_vals, original, errors):
+    print(f"\n{label.upper()} SUMMARY")
+    print(f"largest coef deviation : {errors['coef']:.8f}")
+    print(f"intercept difference   : {errors['intercept']:.8f}")
+    print("coef snapshot (q vs dq, first 5):")
+    for i in range(min(5, len(q_vals))):
+        print(f"  q:{q_vals[i]}  dq:{np.round(dq_vals[i],6)}")
+
+
+# ==============================
+# MAIN
+# ==============================
 model = load_model()
+raw_dump = {"weights": model.coef_, "bias": model.intercept_}
+save_params(raw_dump, "base_params.joblib")
 
-raw = {"coef": model.coef_, "intercept": model.intercept_}
-save_params(raw, "unquant_params.joblib")
+# ---- Load data ----
+X_tr, X_te, y_tr, y_te = load_data()
 
-q_coef, min_c, scale_c = quantize_array(model.coef_)
-q_int, min_i, scale_i = quantize_array(np.array([model.intercept_]))
+# ---- 8-bit ----
+q8, mn8, sc8 = quantize_tensor(model.coef_, bits=8)
+dq8 = dequantize_tensor(q8, mn8, sc8)
+bias8_corrected = bias_correction(X_tr, y_tr, dq8, model.intercept_)
+save_params(
+    {"q_coef": q8, "coef_min": mn8, "coef_scale": sc8, "q_bias": bias8_corrected},
+    "compressed_8bit.joblib",
+)
 
-quant = {
-    "quant_coef": q_coef,
-    "coef_min": min_c,
-    "coef_scale": scale_c,
-    "quant_intercept": q_int,
-    "intercept_min": min_i,
-    "intercept_scale": scale_i,
+# ---- 16-bit ----
+q16, mn16, sc16 = quantize_array_16bit(model.coef_)
+dq16 = dequantize_array_16bit(q16, mn16, sc16)
+bias16_corrected = bias_correction(X_tr, y_tr, dq16, model.intercept_)
+save_params(
+    {"q_coef": q16, "coef_min": mn16, "coef_scale": sc16, "q_bias": bias16_corrected},
+    "compressed_16bit.joblib",
+)
+
+# ---- Predictions ----
+ref_preds = model.predict(X_te)
+preds8 = predict_from_weights(X_te, dq8, bias8_corrected)
+preds16 = predict_from_weights(X_te, dq16, bias16_corrected)
+
+# ---- Metrics ----
+m_ref = compute_metrics(y_te, ref_preds)
+m8 = compute_metrics(y_te, preds8)
+m16 = compute_metrics(y_te, preds16)
+
+err8 = {
+    "max": np.max(np.abs(ref_preds - preds8)),
+    "mean": np.mean(np.abs(ref_preds - preds8)),
 }
-save_params(quant, "quant_params.joblib")
-
-deq_coef = dequantize_array(q_coef, min_c, scale_c)
-deq_int = dequantize_array(q_int, min_i, scale_i)[0]
-
-q16_coef, min16_c, scale16_c = quantize_array_16bit(model.coef_)
-q16_int, min16_i, scale16_i = quantize_array_16bit(np.array([model.intercept_]))
-
-quant16 = {
-    "quant_coef": q16_coef,
-    "coef_min": min16_c,
-    "coef_scale": scale16_c,
-    "quant_intercept": q16_int,
-    "intercept_min": min16_i,
-    "intercept_scale": scale16_i,
+err16 = {
+    "max": np.max(np.abs(ref_preds - preds16)),
+    "mean": np.mean(np.abs(ref_preds - preds16)),
 }
-save_params(quant16, "quant_params_16bit.joblib")
 
-deq16_coef = dequantize_array_16bit(q16_coef, min16_c, scale16_c)
-deq16_int = dequantize_array_16bit(q16_int, min16_i, scale16_i)[0]
+size_ref = get_file_size_kb("model.joblib")
+size8 = get_file_size_kb("compressed_8bit.joblib")
+size16 = get_file_size_kb("compressed_16bit.joblib")
 
-X_train, X_test, y_train, y_test = load_data()
-original_preds = model.predict(X_test)
-dequant_preds = np.dot(X_test, deq_coef) + deq_int
-dequant16_preds = np.dot(X_test, deq16_coef) + deq16_int
+# ---- Output ----
+print("\nPERFORMANCE CHECK")
+print(
+    f"reference r²   : {m_ref['r2']:.4f}, mse: {m_ref['mse']:.4f}, mae: {m_ref['mae']:.4f}"
+)
+print(
+    f"8-bit r²       : {m8['r2']:.4f}, mse: {m8['mse']:.4f}, mae: {m8['mae']:.4f}"
+)
+print(
+    f"16-bit r²      : {m16['r2']:.4f}, mse: {m16['mse']:.4f}, mae: {m16['mae']:.4f}"
+)
 
-r2_orig = r2_score(y_test, original_preds)
-mse_orig = mean_squared_error(y_test, original_preds)
-mae_orig = mean_absolute_error(y_test, original_preds)
-
-r2_quant = r2_score(y_test, dequant_preds)
-mse_quant = mean_squared_error(y_test, dequant_preds)
-mae_quant = mean_absolute_error(y_test, dequant_preds)
-
-max_error = np.max(np.abs(original_preds - dequant_preds))
-mean_error = np.mean(np.abs(original_preds - dequant_preds))
-
-r2_16 = r2_score(y_test, dequant16_preds)
-mse_16 = mean_squared_error(y_test, dequant16_preds)
-mae_16 = mean_absolute_error(y_test, dequant16_preds)
-
-max_error_16 = np.max(np.abs(original_preds - dequant16_preds))
-mean_error_16 = np.mean(np.abs(original_preds - dequant16_preds))
-
-original_size = get_file_size_kb("model.joblib")
-quantized_size = get_file_size_kb("quant_params.joblib")
-quantized16_size = get_file_size_kb("quant_params_16bit.joblib")
-
-print("\noriginal model loss:", round(mse_orig, 4))
-print("original model accuracy (r²):", round(r2_orig, 4))
-print("quantized model loss:", round(mse_quant, 4))
-print("quantized model accuracy (r²):", round(r2_quant, 4))
-print("16-bit quantized model loss:", round(mse_16, 4))
-print("16-bit quantized model accuracy (r²):", round(r2_16, 4))
-
-table = [
-    ["r² score", f"{r2_orig:.4f}", f"{r2_quant:.4f}", f"{r2_16:.4f}"],
-    ["mse (loss)", f"{mse_orig:.4f}", f"{mse_quant:.4f}", f"{mse_16:.4f}"],
-    ["mae", f"{mae_orig:.4f}", f"{mae_quant:.4f}", f"{mae_16:.4f}"],
-    ["max prediction error", "-", f"{max_error:.6f}", f"{max_error_16:.6f}"],
-    ["mean prediction error", "-", f"{mean_error:.6f}", f"{mean_error_16:.6f}"],
-    ["model size", f"{original_size} kb", f"{quantized_size} kb", f"{quantized16_size} kb"]
+data_table = [
+    ["R²", f"{m_ref['r2']:.4f}", f"{m8['r2']:.4f}", f"{m16['r2']:.4f}"],
+    ["MSE", f"{m_ref['mse']:.4f}", f"{m8['mse']:.4f}", f"{m16['mse']:.4f}"],
+    ["MAE", f"{m_ref['mae']:.4f}", f"{m8['mae']:.4f}", f"{m16['mae']:.4f}"],
+    ["Max error", "-", f"{err8['max']:.6f}", f"{err16['max']:.6f}"],
+    ["Mean error", "-", f"{err8['mean']:.6f}", f"{err16['mean']:.6f}"],
+    ["File size", f"{size_ref} kb", f"{size8} kb", f"{size16} kb"],
 ]
 
-print("\nmodel accuracy and loss\n")
-print(tabulate(table, headers=["metric", "original model", "8-bit quantized model", "16-bit quantized model"], tablefmt="github"))
+print("\nCOMPARATIVE RESULTS\n")
+print(
+    tabulate(
+        data_table,
+        headers=["Metric", "Baseline", "8-bit", "16-bit"],
+        tablefmt="fancy_grid",
+    )
+)
 
 print("\n" + "=" * 60)
-print("checking parameter integrity")
+print("PARAMETER CONSISTENCY")
 print("=" * 60)
+print(f"\nweights shape : {model.coef_.shape}")
+print(f"bias value    : {model.intercept_:.6f}")
+print("weights sample:")
+print(np.round(model.coef_[:10], 6).tolist())
 
-print(f"\noriginal coefficient shape        : {model.coef_.shape}")
-print(f"original intercept value          : {model.intercept_:.6f}")
+show_param_stats(
+    "8-bit",
+    q8,
+    dq8,
+    model.coef_,
+    {
+        "coef": np.max(np.abs(model.coef_ - dq8)),
+        "intercept": abs(model.intercept_ - bias8_corrected),
+    },
+)
+show_param_stats(
+    "16-bit",
+    q16,
+    dq16,
+    model.coef_,
+    {
+        "coef": np.max(np.abs(model.coef_ - dq16)),
+        "intercept": abs(model.intercept_ - bias16_corrected),
+    },
+)
 
-print("\noriginal coefficient values       :")
-print(np.round(model.coef_, 6).tolist())
+print("\n" + "=" * 60)
+print("PREDICTION ALIGNMENT SAMPLE")
+print("=" * 60)
+print("\nFirst 10 prediction comparisons:")
+print(
+    f"{'Row':<4} {'Ref':<14} {'Q8 (manual)':<20} {'DQ8 (manual)':<20} {'Q16 (manual)':<20} {'DQ16 (manual)':<20} {'Δ8':<10} {'Δ16':<10}"
+)
+print("-" * 150)
 
-coef_error = np.max(np.abs(model.coef_ - deq_coef))
-intercept_error = abs(model.intercept_ - deq_int)
+for j in range(10):
+    ref_val = float(ref_preds[j])
 
-coef_error_16 = np.max(np.abs(model.coef_ - deq16_coef))
-intercept_error_16 = abs(model.intercept_ - deq16_int)
+    # Q8 (manual): reconstruction without bias correction
+    q8_manual = (X_te[j] @ dq8) + model.intercept_
+    dq8_val = float(preds8[j])  # bias corrected
 
-print(f"\ncoefficient max error (quantized 8-bit) : {coef_error:.8f}")
-print(f"intercept error (quantized 8-bit)       : {intercept_error:.8f}")
-print(f"coefficient max error (quantized 16-bit): {coef_error_16:.8f}")
-print(f"intercept error (quantized 16-bit)      : {intercept_error_16:.8f}")
+    q16_manual = (X_te[j] @ dq16) + model.intercept_
+    dq16_val = float(preds16[j])  # bias corrected
 
-print(f"\nquantized coef preview 8-bit (first 5)  : {quant['quant_coef'][:5].tolist()}")
-print(f"dequantized coef preview 8-bit (first 5): {np.round(deq_coef[:5], 6).tolist()}")
-print(f"quantized coef preview 16-bit (first 5) : {quant16['quant_coef'][:5].tolist()}")
-print(f"dequantized coef preview 16-bit (first 5): {np.round(deq16_coef[:5], 6).tolist()}")
+    delta8 = abs(ref_val - dq8_val)
+    delta16 = abs(ref_val - dq16_val)
 
-print("\n" + "="*60)
-print("verifying inference consistency on test data")
-print("="*60)
+    print(
+        f"{j:<4} {ref_val:<14.6f} {q8_manual:<20.6f} {dq8_val:<20.6f} {q16_manual:<20.6f} {dq16_val:<20.6f} {delta8:<10.6f} {delta16:<10.6f}"
+    )
 
-print("\ntop 10 predictions comparison:\n")
-print(f"{'Index':<6} {'sklearn':<15} {'manual-quantized(8bit)':<25} {'manual-dequantized(8bit)':<25} "
-      f"{'manual-quantized(16bit)':<25} {'manual-dequantized(16bit)':<25} {'Err8':<12} {'Err16':<12}")
-print("-" * 180)
-for i in range(10):
-    manual_quant_8bit = (np.dot(X_test[i], q_coef / scale_c + min_c) + (q_int / scale_i + min_i)).item()
-    manual_dequant_8bit = dequant_preds[i].item() if isinstance(dequant_preds[i], np.ndarray) else dequant_preds[i]
-    manual_quant_16bit = (np.dot(X_test[i], q16_coef / scale16_c + min16_c) + (q16_int / scale16_i + min16_i)).item()
-    manual_dequant_16bit = dequant16_preds[i].item() if isinstance(dequant16_preds[i], np.ndarray) else dequant16_preds[i]
-
-    err8 = abs(original_preds[i] - manual_dequant_8bit)
-    err16 = abs(original_preds[i] - manual_dequant_16bit)
-
-    print(f"{i:<6} {original_preds[i]:<15.6f} {manual_quant_8bit:<25.6f} {manual_dequant_8bit:<25.6f} "
-          f"{manual_quant_16bit:<25.6f} {manual_dequant_16bit:<25.6f} {err8:<12.6f} {err16:<12.6f}")
-
-print("\n" + "="*60)
-print("summary")
-print("="*60)
-print("8-bit shows higher quantization error")
-print("16-bit predictions are much closer to original sklearn outputs")
-print("absolute error columns confirm 16-bit improves accuracy significantly\n")
+print("\nSUMMARY NOTE")
+print("→ 8-bit compression with bias correction reduces error but still trails baseline.")
+print("→ 16-bit stays very close to baseline predictions.")
+print("→ error stats confirm that 16-bit strikes a better balance between size and accuracy.\n")
